@@ -38,6 +38,8 @@
   --teal-dim:  rgba(20,208,181,0.13);
   --rose:      #ff7a45;
   --rose-dim:  rgba(255,122,69,0.13);
+  --prod:      #ff5fa8;
+  --prod-dim:  rgba(255,95,168,0.13);
   --r:         14px;
   --r-sm:      10px;
   --r-xs:      8px;
@@ -258,6 +260,7 @@ body {
 .badge { font-size:10px; font-weight:700; padding:2px 8px; border-radius:99px; white-space:nowrap; letter-spacing:0.2px; }
 .badge-late    { background:var(--red-dim);   color:var(--red);   border:1px solid rgba(255,83,114,0.22); }
 .badge-carried { background:var(--amber-dim); color:var(--amber); border:1px solid rgba(245,158,42,0.22); }
+.badge-prod    { background:var(--prod-dim);   color:var(--prod);  border:1px solid rgba(255,95,168,0.28); }
 .member-chip {
   display:inline-flex; align-items:center; gap:5px;
   font-size:11px; font-weight:600; color:var(--accent2);
@@ -300,7 +303,16 @@ body {
 .timeline-content { flex:1; }
 .timeline-status-row { display:flex; align-items:center; justify-content:space-between; gap:6px; flex-wrap:wrap; }
 .timeline-status-name { font-size:13px; font-weight:600; color:var(--text); }
+.timeline-time-group { display:flex; align-items:center; gap:6px; }
 .timeline-time  { font-size:11px; color:var(--text3); font-family:'JetBrains Mono',monospace; }
+.timeline-del-btn {
+  display:flex; align-items:center; justify-content:center;
+  width:18px; height:18px; border-radius:50%; flex-shrink:0;
+  background:transparent; border:1px solid var(--border2); color:var(--text3);
+  font-size:10px; line-height:1; cursor:pointer; padding:0;
+  transition:background 0.15s, color 0.15s, border-color 0.15s;
+}
+.timeline-del-btn:hover { background:var(--red-dim); color:var(--red); border-color:rgba(255,90,90,0.35); }
 .timeline-note  { font-size:12px; color:var(--text2); margin-top:3px; line-height:1.5; }
 
 /* ── STATUS CHANGE FORM ──────────────────────── */
@@ -419,6 +431,10 @@ body {
 .summary-entry-time { font-size:10px; color:var(--text3); font-family:'JetBrains Mono',monospace; white-space:nowrap; margin-left:auto; }
 .summary-filter-row { display:flex; gap:8px; margin-bottom:16px; }
 .summary-filter-row select { flex:1; }
+.summary-date-row { align-items:center; }
+.summary-date-row input[type="date"] { flex:1; min-width:0; }
+.summary-date-sep { font-size:11px; color:var(--text3); flex-shrink:0; }
+.summary-date-row .btn-copy-summary { flex-shrink:0; }
 .summary-header-row { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:16px; }
 .btn-copy-summary {
   display:flex; align-items:center; gap:6px; flex-shrink:0;
@@ -823,6 +839,12 @@ input[type="date"]::-webkit-calendar-picker-indicator { filter:invert(0.35); cur
             <option value="all">All time</option>
           </select>
         </div>
+        <div class="summary-filter-row summary-date-row">
+          <input type="date" id="sum-from" onchange="renderSummary()">
+          <span class="summary-date-sep">to</span>
+          <input type="date" id="sum-to" onchange="renderSummary()">
+          <button type="button" class="btn-copy-summary" onclick="clearSummaryDateRange()">Clear</button>
+        </div>
         <div id="summary-list"></div>
       </div>
     </div>
@@ -998,6 +1020,10 @@ function fmtClock(ts) {
 function fmtDate(dt) {
   if (!dt) return "—";
   try { return new Date(dt).toLocaleDateString([], { dateStyle: "medium" }); } catch { return dt; }
+}
+function fmtDateOnly(ds) {
+  if (!ds) return "";
+  try { return new Date(ds + "T00:00:00").toLocaleDateString([], { dateStyle: "medium" }); } catch { return ds; }
 }
 
 function updateHeaderDate() {
@@ -1215,6 +1241,62 @@ async function applyStatusChange(taskId) {
   }, 30);
 }
 
+async function removeHistoryEntry(taskId, index) {
+  const t = tasks.find(x => x.id === taskId);
+  if (!t) return;
+  const history = t.history || [];
+  if (history.length <= 1) { alert("A task needs at least one history entry — edit or add a new status instead."); return; }
+  if (index < 0 || index >= history.length) return;
+  if (!confirm("Remove this status history entry? This can't be undone.")) return;
+
+  const newHistory = history.slice(0, index).concat(history.slice(index + 1));
+  const latest = newHistory.reduce((a, b) => (b.time || 0) > (a.time || 0) ? b : a, newHistory[0]);
+  const newStatus = latest.status;
+  const today = todayStr();
+  const newCarried = newStatus === "completed" ? false : (t.createdDate || today) < today;
+
+  const expanded = document.querySelector('[data-id="' + taskId + '"]')?.classList.contains("expanded");
+  try {
+    await updateDoc(doc(db, "tasks", taskId), { history: newHistory, status: newStatus, carried: newCarried });
+  } catch (err) {
+    console.error(err);
+    alert("Could not remove that entry in Firebase.");
+    return;
+  }
+  if (expanded) setTimeout(() => {
+    const card = document.querySelector('[data-id="' + taskId + '"]');
+    if (card) card.classList.add("expanded");
+  }, 30);
+}
+
+async function toggleProdDeploy(taskId, checked) {
+  const t = tasks.find(x => x.id === taskId);
+  if (!t) return;
+  const field = document.getElementById("prod-field-" + taskId);
+  if (field) field.classList.toggle("show", checked);
+  const updates = { prodEnabled: checked };
+  if (checked && !t.prodDate) {
+    const dateInput = document.getElementById("proddate-" + taskId);
+    updates.prodDate = (dateInput && dateInput.value) || todayStr();
+  }
+  try {
+    await updateDoc(doc(db, "tasks", taskId), updates);
+  } catch (err) {
+    console.error(err);
+    alert("Could not update the prod deploy flag in Firebase.");
+  }
+}
+
+async function setProdDate(taskId, value) {
+  if (!value) return;
+  try {
+    await updateDoc(doc(db, "tasks", taskId), { prodDate: value });
+  } catch (err) {
+    console.error(err);
+    alert("Could not update the prod deploy date in Firebase.");
+  }
+}
+
 async function deleteTask(id) {
   if (!confirm("Delete this task?")) return;
   try { await deleteDoc(doc(db, "tasks", id)); }
@@ -1273,7 +1355,7 @@ function buildTaskCard(t, isNextDay) {
   if (isNextDay) cardClass += " carried";
 
   const maxHistTime = history.reduce((mx, h) => Math.max(mx, h.time || 0), 0);
-  const timelineHtml = history.map((h) => {
+  const timelineHtml = history.map((h, i) => {
     const isLast = (h.time || 0) === maxHistTime;
     const dotCls = isLast ? timelineDotClass(h.status) : "";
     return `<div class="timeline-item">
@@ -1281,7 +1363,10 @@ function buildTaskCard(t, isNextDay) {
       <div class="timeline-content">
         <div class="timeline-status-row">
           <span class="timeline-status-name">${esc(statusLabel(h.status))}</span>
-          <span class="timeline-time">${fmtTime(h.time)}</span>
+          <span class="timeline-time-group">
+            <span class="timeline-time">${fmtTime(h.time)}</span>
+            ${history.length > 1 ? `<button type="button" class="timeline-del-btn" onclick="removeHistoryEntry('${t.id}', ${i})" title="Remove this entry">✕</button>` : ""}
+          </span>
         </div>
         ${h.note ? `<div class="timeline-note">${esc(h.note)}</div>` : ""}
       </div>
@@ -1304,6 +1389,7 @@ function buildTaskCard(t, isNextDay) {
           <span class="task-name">${esc(t.name)}</span>
           ${late ? '<span class="badge badge-late">Late</span>' : ""}
           ${isNextDay ? '<span class="badge badge-carried">Carried</span>' : ""}
+          ${t.prodEnabled ? `<span class="badge badge-prod">🚀 Prod Deploy${t.prodDate ? " • " + esc(fmtDateOnly(t.prodDate)) : ""}</span>` : ""}
         </div>
         <div class="task-meta-row">
           ${memberHtml}
@@ -1350,6 +1436,23 @@ function buildTaskCard(t, isNextDay) {
           <div class="status-section-label">Status History</div>
           <div class="status-timeline">${timelineHtml}</div>
         </div>` : ""}
+
+        <div class="status-section">
+          <div class="status-section-label">Production Deploy</div>
+          <div class="backdate-toggle-row">
+            <div>
+              <div class="backdate-toggle-label">Mark as Prod Deploy</div>
+              <div class="backdate-toggle-sub">Flags this task and shows a label with the deploy date</div>
+            </div>
+            <label class="switch">
+              <input type="checkbox" ${t.prodEnabled ? "checked" : ""} onchange="toggleProdDeploy('${t.id}', this.checked)">
+              <span class="switch-track"></span>
+            </label>
+          </div>
+          <div class="backdate-field${t.prodEnabled ? " show" : ""}" id="prod-field-${t.id}">
+            <input type="date" id="proddate-${t.id}" value="${esc(t.prodDate || todayStr())}" onchange="setProdDate('${t.id}', this.value)">
+          </div>
+        </div>
 
         <div class="details-grid">
           <div><div class="detail-label">Member</div><div class="detail-value">${esc(t.member || "—")}</div></div>
@@ -1465,10 +1568,14 @@ function dayLabel(ds) {
 function buildSummaryData() {
   const memberFilter = document.getElementById("sum-member").value;
   const range = document.getElementById("sum-range").value;
+  const fromVal = document.getElementById("sum-from").value;
+  const toVal = document.getElementById("sum-to").value;
 
-  let minDate = null;
-  let exactDays = null;
-  if (range === "ty") {
+  let minDate = null, maxDate = null, exactDays = null;
+  if (fromVal || toVal) {
+    minDate = fromVal || null;
+    maxDate = toVal || null;
+  } else if (range === "ty") {
     exactDays = [todayStr(), yesterdayStr()];
   } else if (range !== "all") {
     const d = new Date(); d.setDate(d.getDate() - parseInt(range, 10));
@@ -1491,11 +1598,17 @@ function buildSummaryData() {
         const ds = dateStr(h.time);
         if (!ds) return;
         if (exactDays) { if (!exactDays.includes(ds)) return; }
-        else if (minDate && ds < minDate) return;
+        else {
+          if (minDate && ds < minDate) return;
+          if (maxDate && ds > maxDate) return;
+        }
         if (!byDay[ds]) byDay[ds] = {};
         const existing = byDay[ds][t.id];
         if (!existing || (h.time || 0) >= (existing.time || 0)) {
-          byDay[ds][t.id] = { taskName: t.name, status: h.status, note: h.note, time: h.time };
+          byDay[ds][t.id] = {
+            taskName: t.name, status: h.status, note: h.note, time: h.time,
+            prodEnabled: t.prodEnabled, prodDate: t.prodDate
+          };
         }
       });
     });
@@ -1512,6 +1625,12 @@ function buildSummaryData() {
   });
 
   return result;
+}
+
+function clearSummaryDateRange() {
+  document.getElementById("sum-from").value = "";
+  document.getElementById("sum-to").value = "";
+  renderSummary();
 }
 
 function renderSummary() {
@@ -1536,6 +1655,7 @@ function renderSummary() {
               <div class="summary-entry-row">
                 <span class="summary-entry-task">${esc(e.taskName)}</span>
                 <span class="summary-entry-status" style="color:var(--text2)">— ${esc(statusLabel(e.status))}</span>
+                ${e.prodEnabled ? `<span class="badge badge-prod">🚀 Prod Deploy${e.prodDate ? " • " + esc(fmtDateOnly(e.prodDate)) : ""}</span>` : ""}
                 <span class="summary-entry-time">${esc(fmtClock(e.time))}</span>
               </div>
               ${e.note ? `<div class="summary-entry-note">${esc(e.note)}</div>` : ""}
@@ -1570,6 +1690,7 @@ function summaryToText() {
       lines.push(label);
       entries.forEach(e => {
         const parts = [e.taskName, "-", statusLabel(e.status)];
+        if (e.prodEnabled) parts.push("[Prod Deploy" + (e.prodDate ? " " + fmtDateOnly(e.prodDate) : "") + "]");
         if (e.note) parts.push("- " + e.note);
         lines.push(parts.join(" "));
       });
@@ -1602,7 +1723,8 @@ async function copySummary() {
 Object.assign(window, {
   showTab, addTask, clearFilters, deleteTask, openEdit, closeModal, saveEdit,
   applyStatusChange, selectStatusBtn, toggleExpand, toggleBackdateField,
-  toggleStatusBackdateField, renderTasks, renderSummary, copySummary
+  toggleStatusBackdateField, removeHistoryEntry, toggleProdDeploy, setProdDate,
+  renderTasks, renderSummary, copySummary, clearSummaryDateRange
 });
 
 window.addEventListener("DOMContentLoaded", () => {
