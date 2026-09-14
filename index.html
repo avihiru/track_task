@@ -990,7 +990,7 @@ function normalizeTasks() {
   const today = todayStr();
   tasks.forEach(t => {
     if (!t.createdDate) {
-      t.createdDate = t.created ? new Date(t.created).toISOString().slice(0, 10) : today;
+      t.createdDate = t.created ? dateStr(t.created) : today;
     }
     if (t.status !== "completed") {
       t.carried = t.createdDate < today;
@@ -1002,8 +1002,17 @@ function normalizeTasks() {
 }
 
 function genId() { return Date.now() + "" + Math.random().toString(36).slice(2, 6); }
-function todayStr() { return new Date().toISOString().slice(0, 10); }
-function dateStr(ts) { try { return new Date(ts).toISOString().slice(0, 10); } catch { return ""; } }
+// Local calendar date (YYYY-MM-DD) — NOT UTC. toISOString() shifts to UTC,
+// which misbuckets tasks near midnight for any timezone ahead of UTC
+// (e.g. a task made at 12:30am local could show as "yesterday").
+function localDateStr(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+function todayStr() { return localDateStr(new Date()); }
+function dateStr(ts) { if (!ts) return ""; try { return localDateStr(new Date(ts)); } catch { return ""; } }
 
 function fmtFull(dt) {
   if (!dt) return "—";
@@ -1116,7 +1125,7 @@ async function addTask() {
 
 function yesterdayStr() {
   const d = new Date(); d.setDate(d.getDate() - 1);
-  return d.toISOString().slice(0, 10);
+  return localDateStr(d);
 }
 
 function getFiltered() {
@@ -1579,7 +1588,7 @@ function buildSummaryData() {
     exactDays = [todayStr(), yesterdayStr()];
   } else if (range !== "all") {
     const d = new Date(); d.setDate(d.getDate() - parseInt(range, 10));
-    minDate = d.toISOString().slice(0, 10);
+    minDate = localDateStr(d);
   }
 
   const members = memberFilter ? [memberFilter] : MEMBERS.filter(m =>
