@@ -425,7 +425,6 @@ body {
 .summary-entry.se-hold        { border-left-color:var(--hold); }
 .summary-entry.se-qa-pass     { border-left-color:var(--teal); }
 .summary-entry.se-issue-found { border-left-color:var(--rose); }
-.summary-entry.se-scheduled   { border-left-color:var(--blue); }
 .summary-entry-body { flex:1; min-width:0; }
 .summary-entry-row { display:flex; align-items:center; gap:7px; flex-wrap:wrap; }
 .summary-entry-task { font-size:13px; font-weight:600; color:var(--text); }
@@ -1138,10 +1137,7 @@ const STATUS_META = {
   "hold":        { label: "On Hold",      reasonRequired: true, reasonPlaceholder: "Reason for hold (required)..." },
   "qa-pass":     { label: "QA Pass",      reasonRequired: true, reasonPlaceholder: "QA notes (required)..." },
   "issue-found": { label: "Issue Found",  reasonRequired: true, reasonPlaceholder: "Describe the issue (required)..." },
-  "completed":   { label: "Completed",    reasonRequired: false },
-  // not a real task status (never on STATUS_ORDER, never a status button) —
-  // only used as a synthetic Summary entry for tasks with a future start date
-  "scheduled":   { label: "Scheduled",    reasonRequired: false }
+  "completed":   { label: "Completed",    reasonRequired: false }
 };
 
 function initials(name) {
@@ -2149,16 +2145,12 @@ function buildSummaryData() {
   const toVal = document.getElementById("sum-to").value;
 
   let minDate = null, maxDate = null, exactDays = null;
-  let includeFutureScheduled = false;
   if (fromVal || toVal) {
     minDate = fromVal || null;
     maxDate = toVal || null;
-    includeFutureScheduled = true; // an explicit custom range should honor a future "To" date too
   } else if (range === "ty") {
     exactDays = [todayStr(), yesterdayStr()];
-  } else if (range === "all") {
-    includeFutureScheduled = true; // "All time" naturally includes upcoming scheduled tasks
-  } else {
+  } else if (range !== "all") {
     const d = new Date(); d.setDate(d.getDate() - parseInt(range, 10));
     minDate = localDateStr(d);
   }
@@ -2179,13 +2171,15 @@ function buildSummaryData() {
     memberTasks.forEach(t => {
       const futureStartDs = t.start ? dateStr(t.start) : null;
       const hasFutureStart = !!(futureStartDs && futureStartDs > todayStr());
+      const history = t.history || [];
+      const latestEntry = history.reduce((a, b) => (b.time || 0) > ((a && a.time) || 0) ? b : a, history[0]) || {};
 
-      (t.history || []).forEach(h => {
+      history.forEach(h => {
         const ds = dateStr(h.time);
         if (!ds || !inRange(ds)) return;
-        // a task scheduled for a future date shouldn't clutter earlier days
-        // (typically just its "Task created" entry) — it shows once, as
-        // "Scheduled", on the date it's actually meant to start.
+        // Any task with a future start date — whatever its status, new or
+        // old task, touched or not — shows once under its start date
+        // instead of scattering its earlier activity across earlier days.
         if (hasFutureStart && ds < futureStartDs) return;
         if (!byDay[ds]) byDay[ds] = {};
         const existing = byDay[ds][t.id];
@@ -2197,15 +2191,16 @@ function buildSummaryData() {
         }
       });
 
-      // a task with a future start date shows up as "Scheduled" on that day
-      // too, once the picked range reaches that far ahead (custom range's
-      // "To" date, or "All time") — so upcoming work isn't invisible until
-      // its status actually changes.
-      if (includeFutureScheduled && hasFutureStart && inRange(futureStartDs)) {
+      // show it under its future start date too, with its actual current
+      // status (whatever that is) and latest real note — same formatting
+      // as any other entry, no special label — so it isn't invisible until
+      // that date arrives.
+      if (hasFutureStart && inRange(futureStartDs)) {
         if (!byDay[futureStartDs]) byDay[futureStartDs] = {};
         if (!byDay[futureStartDs][t.id]) {
+          const note = (latestEntry.note && latestEntry.note !== "Task created") ? latestEntry.note : "";
           byDay[futureStartDs][t.id] = {
-            taskName: t.name, status: "scheduled", note: "", time: new Date(t.start).getTime(),
+            taskName: t.name, status: t.status, note, time: new Date(t.start).getTime(),
             prodEnabled: t.prodEnabled, prodDate: t.prodDate
           };
         }
